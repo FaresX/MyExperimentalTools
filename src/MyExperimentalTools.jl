@@ -19,14 +19,15 @@ using JLD2
 using Statistics
 using Smoothers
 using Peaks
-using Integrals
+# using Integrals
 using DataInterpolations
 using Unitful
 using LinearAlgebra
 using FiniteDifferences
+using NumericalIntegration
 
 export fastload, resize, xyzforheatmap, prompeaks, findpks2, findpks, loedata, hma, transversal
-export intIbias, intIbiasmap, sortd, normalization, interpVs, alignx, aligny, flip, interpxyz, loadxy, loadxyz
+export intIbias, sortd, normalization, interpVs, alignx, aligny, flip, interpxyz, loadxy, loadxyz
 export binstep, binstepmap, IV2dIdV, IV2dIdVmap, jBtojx
 
 include("DataAnalysis.jl")
