@@ -339,24 +339,24 @@ function interpVs(Vs, Rs)
     rangev, Rsn
 end
 
-function alignx(x, y, z; yval=y[1], order=12, w=nothing)
-    yaddr = argmin(abs.(y .- yval))
-    xv, yv = x, z[yaddr, :]
-    isnothing(w) || (yv = hma(yv, w))
-    interp = LinearInterpolation(yv, xv)
-    df(x) = central_fdm(order, 1)(y -> interp(y), x)
-    dfs = abs.(df.(xv))
-    pki, _, _, _ = prompeaks(dfs, 2)
-    p = plot(xv, dfs)
-    scatter!(xv[pki], dfs[pki])
-    x .- sum(x[pki]) / 2, y, z, p
-end
-function aligny(x, y, z; q=length(x) ÷ 4, baseline=Inf)
-    Ics = loedata(x, findpks2((x, y, z), Val(:inner), baseline=baseline), q=q)
-    p = heatmap(x, y, z)
-    scatter!(x, Ics, ms=1)
-    x, y .- sum(Ics) / length(Ics), z, p
-end
+# function alignx(x, y, z; yval=y[1], order=12, w=nothing)
+#     yaddr = argmin(abs.(y.-yval))
+#     xv, yv = x, z[yaddr,:]
+#     isnothing(w) || (yv = hma(yv, w))
+#     interp = LinearInterpolation(yv, xv)
+#     df(x) = central_fdm(order,1)(y->interp(y), x)
+#     dfs = abs.(df.(xv))
+#     pki,_,_,_ = prompeaks(dfs, 2)
+#     p = plot(xv, dfs)
+#     scatter!(xv[pki], dfs[pki])
+#     x.-sum(x[pki])/2, y, z, p
+# end
+# function aligny(x, y, z; q=length(x)÷4, baseline=Inf)
+#     Ics = loedata(x, findpks2((x, y, z), Val(:inner), baseline=baseline), q=q)
+#     p = heatmap(x,y,z)
+#     scatter!(x, Ics, ms=1)
+#     x, y.-sum(Ics)/length(Ics), z, p
+# end
 
 function flip(x; nodes=[-Inf, Inf], rev=false)
     for i in eachindex(nodes)[1:end-1]
