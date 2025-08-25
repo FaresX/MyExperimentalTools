@@ -23,35 +23,74 @@ function xyzforheatmap(x, y, z)
     return sort(x), sort(reshape(ny, :)), nz
 end
 
-function prompeaks(x, n=1; w=1, dip=false)
-    if dip
-        pki = argminima(x, w)
-    else
-        pki = argmaxima(x, w)
-    end
-    if isempty(pki)
-        return ()
-    end
-    pkp = peakproms(pki, x)[2]
-    sp = sortperm(pkp, rev=true)
-    m = n <= length(sp) ? n : length(sp)
-    peakwidths(pki[sp[1:m]], x, pkp[sp[1:m]])
-end
-
-function findpks2(data, Ic::Val, n=2; baseline=Inf, cutp=0.6)
+function findIcs2(data, Ic::Val, n=2; baseline=Inf, cutp=0.6)
     m = length(data[2])
     ncl = floor(Int, cutp * m)
     ncr = floor(Int, (1 - cutp) * m)
     datal = (data[1], data[2][1:ncl], data[3][1:ncl, :])
     datar = (data[1], data[2][ncr:end], data[3][ncr:end, :])
-    [findpks(datal, Ic, n ÷ 2; baseline=baseline) findpks(datar, Ic, n ÷ 2; baseline=baseline)]
+    [findIcs(datal, Ic, n ÷ 2; baseline=baseline) findIcs(datar, Ic, n ÷ 2; baseline=baseline)]
 end
 
-function findpks(data, ::Val{:inner}, n=1; baseline=Inf)
+function findIcs(x, y, z, n=1; method=:inner, baseline=Inf, min=nothing, max=nothing)
+    findIcs((x, y, z), Val(method), n; baseline=baseline, min=min, max=max)
+end
+
+function filterIcs!(x, y, z, Ic; filtersz=[], filtersy=[])
+    for ft in filtersz
+        for (xj, ic) in enumerate(Ic)
+            yi = argmin(abs.(y .- ic))
+            ft[1] < z[yi, xj] < ft[2] && (Ic[xj] = missing)
+        end
+    end
+    for ft in filtersy
+        for (xj, ic) in enumerate(Ic)
+            idxl = argmin(abs.(x .- ft[1]))
+            idxr = argmin(abs.(x .- ft[2]))
+            x[idxl] < x[xj] < x[idxr] && !ismissing(ic) && ft[3] < ic < ft[4] && (Ic[xj] = missing)
+        end
+    end
+    return Ic
+end
+filterIcs(x, y, z, Ic; filtersz=[], filtersy=[]) = filterIc!(x, y, z, copy(Ic); filtersz=filtersz, filtersy=filtersy)
+function limitIcsboundsy!(f, x, Ic)
+    for (i, (xi, ic)) in enumerate(zip(x, Ic))
+        lb, ub = f(xi)
+        (!ismissing(ic) && lb < ic < ub) || (Ic[i] = missing)
+    end
+    return Ic
+end
+limitpksboundsy(f, x, Ic) = limitIcsboundsy!(f, x, copy(Ic))
+function limitIcsboundsy!(x, Ic, lbs, ubs)
+    lbxs = [p[1] for p in lbs]
+    lbys = [p[2] for p in lbs]
+    lbxssp, lbyssp = sortd(lbxs, lbys)
+    ubxs = [p[1] for p in ubs]
+    ubys = [p[2] for p in ubs]
+    ubxssp, ubyssp = sortd(ubxs, ubys)
+    lbinterp = LinearInterpolation(lbyssp, lbxssp; extrapolate=true)
+    ubinterp = LinearInterpolation(ubyssp, ubxssp; extrapolate=true)
+    limitIcsboundsy!(x, Ic) do b
+        lbinterp(b), ubinterp(b)
+    end
+    return Ic, x -> lbinterp(x), x -> ubinterp(x)
+end
+limitpksboundsy(x, Ic, lbs, ubs) = limitIcsboundsy!(x, copy(Ic), lbs, ubs)
+function falldownIcs!(Ics)
+    for i in axes(Ics, 1)
+        avail = collect(eltype(Ics), skipmissing(Ics[i,:]))
+        Ics[i,:] .= append!(avail, fill(missing, size(Ics, 2) - length(avail)))
+    end
+    return Ics
+end
+falldownIcs(Ics) = falldownIcs!(copy(Ics))
+
+
+function findIcs(data, ::Val{:inner}, n=1; baseline=Inf, min=nothing, max=nothing)
     Ics = Array{Union{eltype(data[3]),Missing}}(undef, length(data[1]), n)
     for (i, v) in enumerate(data[1])
         y, z = data[2], data[3][:, i]
-        pk = prompeaks(z, n)
+        pk = prompeaks(z, n; min=min, max=max)
         if isempty(pk)
             continue
         else
@@ -75,11 +114,11 @@ function findpks(data, ::Val{:inner}, n=1; baseline=Inf)
     Ics
 end
 
-function findpks(data, ::Val{:median}, n=1; baseline=Inf)
+function findIcs(data, ::Val{:median}, n=1; baseline=Inf, min=nothing, max=nothing)
     Ics = Array{Union{eltype(data[3]),Missing}}(undef, length(data[1]), n)
     for (i, v) in enumerate(data[1])
         y, z = data[2], data[3][:, i]
-        pk = prompeaks(z, n)
+        pk = prompeaks(z, n; min=min, max=max)
         if isempty(pk)
             continue
         else
@@ -103,11 +142,11 @@ function findpks(data, ::Val{:median}, n=1; baseline=Inf)
     Ics
 end
 
-function findpks(data, ::Val{:outer}, n=1; baseline=Inf)
+function findIcs(data, ::Val{:outer}, n=1; baseline=Inf, min=nothing, max=nothing)
     Ics = Array{Union{eltype(data[3]),Missing}}(undef, length(data[1]), n)
     for (i, v) in enumerate(data[1])
         y, z = data[2], data[3][:, i]
-        pk = prompeaks(z, n)
+        pk = prompeaks(z, n; min=min, max=max)
         if isempty(pk)
             continue
         else
@@ -182,38 +221,6 @@ function transversal(x, y, z, p_value, orientation=:-)
     end
 end
 
-# function intIbias(I, R)
-#     interp = LinearInterpolation(R, I)
-#     V = similar(I)
-#     for i in eachindex(I)
-#         # V[i] = I[i] > 0 ? integral(interp, 0..I[i]) : -integral(interp, (I[i])..0)
-#         V[i] = solve(IntegralProblem((x, p)->interp(x), zero(I[i]), I[i]), QuadGKJL()).u
-#     end
-#     V
-# end
-
-# function intIbiasmap_st(I, Rs)
-#     intV = similar(Rs)
-#     for i in axes(Rs, 2)
-#         intV[:,i] = intIbias(I, Rs[:,i])
-#     end
-#     return intV
-# end
-
-# function intIbiasmap(I, Rs)
-#     intV = similar(Rs)
-#     cols = size(Rs, 2)
-#     parts = collect(Iterators.partition(1:cols, ceil(Int, cols/Threads.nthreads())))
-#     ts = map(parts) do part
-#         Threads.@spawn intIbiasmap_st(I, Rs[:,part])
-#     end
-#     intVparts = fetch.(ts)
-#     for (i, part) in enumerate(parts)
-#         @views intV[:,part] = intVparts[i]
-#     end
-#     return intV
-# end
-
 function intIbias(I, R::Vector)
     idx0 = argmin(abs.(I))
     cumint = cumul_integrate(I, R)
@@ -244,12 +251,18 @@ function binstep_kernel(V::AbstractVector, I, binV)
     binV[2:end], Ih
 end
 
-binstep(V::Vector, I, δ) = binstep_kernel(V, I, collect(V[1]:δ:V[end]))
-
+function determineVs(V, δ)
+    minV, maxV = extrema(V)
+    binV = collect(minV:δ:maxV)
+    idx = argmin(abs.(binV))
+    offset = binV[idx] < 0 ? (binV[idx] + binV[idx+1])/2 : (binV[idx] + binV[idx-1])/2
+    binV .-= offset
+    return offset < 0 ? [binV[1] - δ; binV] : [binV; binV[end] + δ]
+end
+binstep(V::Vector, I, δ) = binstep_kernel(V, I, determineVs(V, δ))
 
 function binstep(Vs::AbstractMatrix, I, δ)
-    minV, maxV = extrema(Vs)
-    binV = collect(minV:δ:maxV)
+    binV = determineVs(Vs, δ)
     m = length(binV)
     Ihs = Matrix{Union{Missing,Float64}}(undef, m - 1, size(Vs, 2))
     for j in axes(Vs, 2)
@@ -290,7 +303,8 @@ end
 # end
 
 function IV2dIdV(V, I, order=12)
-    interp = LinearInterpolation(I, V; extrapolate=true)
+    # interp = LinearInterpolation(I, V; extrapolate=true)
+    interp = linear_interpolation(sortd(V, I)...; extrapolation_bc=Line())
     df(x) = central_fdm(order, 1)(y -> interp(y), x)
     df.(V)
 end
@@ -303,13 +317,16 @@ function IV2dIdVmap(Vs, I, order=12)
     Gs
 end
 
-sortd(x, y) = (sp = sortperm(x); (x[sp], y[sp]))
-function sortd(x, y, z)
+function sortd(x, y, z::Matrix)
     spx = sortperm(x)
     spy = sortperm(y)
     zs = z[:, spx]
     zs = zs[spy, :]
     x[spx], y[spy], zs
+end
+function sortd(x, ys...)
+    sp = sortperm(x)
+    return x[sp], [y[sp] for y in ys]...
 end
 
 function normalization(z)
@@ -325,19 +342,20 @@ function normalization(z)
     zn
 end
 
-function interpVs(Vs, Rs)
-    minv, maxv = extrema(Vs)
-    rangev = range(minv, maxv, length=size(Rs, 1))
-    Rsn = similar(Rs, Union{Float64,Missing})
-    fill!(Rsn, missing)
-    for j in axes(Rs, 2)
-        interp = LinearInterpolation(Rs[:, j], Vs[:, j]; extrapolate=true)
-        minvj, maxvj = extrema(Vs[:, j])
-        idxmin, idxmax = argmin(abs.(rangev .- minvj)), argmin(abs.(rangev .- maxvj))
-        Rsn[idxmin:idxmax, j] = interp.(rangev[idxmin:idxmax])
-    end
-    rangev, Rsn
-end
+# function interpVs(Vs, Rs)
+#     minv, maxv = extrema(Vs)
+#     rangev = range(minv, maxv, length=size(Rs, 1))
+#     Rsn = similar(Rs, Union{Float64,Missing})
+#     fill!(Rsn, missing)
+#     for j in axes(Rs, 2)
+#         # interp = LinearInterpolation(Rs[:, j], Vs[:, j]; extrapolate=true)
+#         interp = linear_interpolation(sortd(Vs[:,j], Rs[:, j])...; extrapolation_bc=Line())
+#         minvj, maxvj = extrema(Vs[:, j])
+#         idxmin, idxmax = argmin(abs.(rangev .- minvj)), argmin(abs.(rangev .- maxvj))
+#         Rsn[idxmin:idxmax, j] = interp.(rangev[idxmin:idxmax])
+#     end
+#     rangev, Rsn
+# end
 
 # function alignx(x, y, z; yval=y[1], order=12, w=nothing)
 #     yaddr = argmin(abs.(y.-yval))
@@ -352,7 +370,7 @@ end
 #     x.-sum(x[pki])/2, y, z, p
 # end
 # function aligny(x, y, z; q=length(x)÷4, baseline=Inf)
-#     Ics = loedata(x, findpks2((x, y, z), Val(:inner), baseline=baseline), q=q)
+#     Ics = loedata(x, findIcs2((x, y, z), Val(:inner), baseline=baseline), q=q)
 #     p = heatmap(x,y,z)
 #     scatter!(x, Ics, ms=1)
 #     x, y.-sum(Ics)/length(Ics), z, p
@@ -364,7 +382,9 @@ function flip(x; nodes=[-Inf, Inf], rev=false)
             return rev ? (-1)^(i + 1) : (-1)^i
         end
     end
-    return rev ? (-1)^length(nodes) : (-1)^(length(nodes) - 1)
+    n = length(nodes)
+    # x == nodes[end] && return rev ? (-1)^(n+1) : (-1)^n
+    return rev ? (-1)^n : (-1)^(n - 1)
 end
 
 function interpxyz(x, y, z, nrange, h=false)
@@ -422,12 +442,52 @@ end
 # binx(x2, 0.559*0.99)
 # x2[362]-x2[361]
 
-function jBtojx(B, Ic, xnodesidx, xrange, W; rev=false, δB=0)
-    nodes = [1; xnodesidx; length(B)]
-    Icflip = Ic .* flip.(B, nodes=B[nodes]; rev=false)
-    Icflip[argmin(abs.(B))] > 0 || (Icflip = Ic .* flip.(B, nodes=B[nodes]; rev=true))
-    Icinterp = LinearInterpolation(Icflip, B)
-    δnodes = [B[xnodesidx[i+1]] - B[xnodesidx[i]] for i in eachindex(xnodesidx)[1:end-1]]
+# function jBtojx(B, Ic, xnodesidx, xrange, W; rev=false, δB=0)
+#     # nodes = [1; xnodesidx; length(B)]
+#     nodes = xndoexidx
+#     Beff = B[nodes]
+#     Iceff = Ic[nodes]
+#     Icflip = Ic .* flip.(B, nodes=B[nodes]; rev=false)
+#     Icflip[argmin(abs.(B))] > 0 || (Icflip = Ic .* flip.(B, nodes=B[nodes]; rev=true))
+#     # Icinterp = LinearInterpolation(Icflip, B)
+#     Icinterp = linear_interpolation(B, Icflip; extrapolation_bc=Line())
+#     δnodes = [B[xnodesidx[i+1]] - B[xnodesidx[i]] for i in eachindex(xnodesidx)[1:end-1]]
+#     if δB == 0
+#         δB = if length(δnodes) == 1
+#             mean(δnodes) / 2
+#         else
+#             maxidx = argmax(abs.(δnodes))
+#             deleteat!(δnodes, maxidx)
+#             mean(δnodes)
+#         end
+#     end
+#     Λ = ustrip(Unitful.Φ0) / (δB * W)
+#     ks = 2π * Λ * B / ustrip(Unitful.Φ0)
+#     # IckE = LinearInterpolation(Icinterp.(B), ks)
+#     IckE = linear_interpolation(ks, Icinterp.(B); extrapolation_bc=Line())
+#     # gap = [0; abs.(Ic[nodes]) .* flip.(nodes, nodes=nodes; rev=rev); 0]
+#     gap = abs.(Ic[nodes]) .* flip.(nodes, nodes=nodes; rev=rev)
+#     # IckO = LinearInterpolation(gap, ks[nodes])
+#     IckO = linear_interpolation(ks[nodes], gap; extrapolation_bc=Line())
+#     # jc(x) = (1/2π)*abs(solve(
+#     #     IntegralProblem((k, p) -> (IckE(k) + im*IckO(k)) * exp(-im*k*x), ks[1], ks[end]), QuadGKJL()
+#     #     ).u
+#     # )
+#     # jcx = jc.(xrange)
+#     kernel(k, x) = (IckE(k) + im * IckO(k)) * exp(-im * k * x)
+#     # jc(x) = (1 / 2π) * abs(integrate(ks, kernel.(ks, x)))
+#     jc(x) = (1 / 2π) * abs(solve(IntegralProblem((k, p) -> (kernel(k, x)), (B[xnodesidx[1]], B[xnodesidx[end]])), QuadGKJL()).u)
+#     jcx = jc.(xrange)
+#     return jcx, IckE.(ks), IckO.(ks), δB
+# end
+
+function jBtojx(B, Ic, nodes, xrange, W; rev=false, δB=0)
+    Beff = B[nodes[1]:nodes[end]]
+    Iceff = Ic[nodes[1]:nodes[end]]
+    Icflip = Iceff .* flip.(Beff, nodes=B[nodes]; rev=false)
+    Icflip[argmin(abs.(Beff))] > 0 || (Icflip = Iceff .* flip.(Beff, nodes=B[nodes]; rev=true))
+    Icinterp = linear_interpolation(Beff, Icflip; extrapolation_bc=Line())
+    δnodes = [B[nodes[i+1]] - B[nodes[i]] for i in eachindex(nodes)[1:end-1]]
     if δB == 0
         δB = if length(δnodes) == 1
             mean(δnodes) / 2
@@ -439,16 +499,141 @@ function jBtojx(B, Ic, xnodesidx, xrange, W; rev=false, δB=0)
     end
     Λ = ustrip(Unitful.Φ0) / (δB * W)
     ks = 2π * Λ * B / ustrip(Unitful.Φ0)
-    IckE = LinearInterpolation(Icinterp.(B), ks)
-    gap = [0; abs.(Ic[nodes]) .* flip.(nodes, nodes=nodes; rev=rev); 0]
-    IckO = LinearInterpolation(gap, ks[nodes])
-    # jc(x) = (1/2π)*abs(solve(
-    #     IntegralProblem((k, p) -> (IckE(k) + im*IckO(k)) * exp(-im*k*x), ks[1], ks[end]), QuadGKJL()
-    #     ).u
-    # )
-    # jcx = jc.(xrange)
+    kseff = ks[nodes[1]:nodes[end]]
+    IckE = linear_interpolation(kseff, Icinterp.(Beff); extrapolation_bc=Line())
+    gap = abs.(Ic[nodes]) .* flip.(nodes, nodes=nodes; rev=rev)
+    gap[end] *= -1
+    IckO = linear_interpolation(ks[nodes], gap; extrapolation_bc=Line())
     kernel(k, x) = (IckE(k) + im * IckO(k)) * exp(-im * k * x)
-    jc(x) = (1 / 2π) * abs(integrate(ks, kernel.(ks, x)))
+    jc(x) = (1 / 2π) * abs(solve(IntegralProblem((k, p) -> (kernel(k, x)), kseff[1], kseff[end]), QuadGKJL()).u)
     jcx = jc.(xrange)
-    return jcx, IckE.(ks), IckO.(ks), δB
+    return jcx, IckE.(kseff), IckO.(kseff), δB
+end
+
+function limitdata(x, y, z, limits)
+    xlimits, ylimits = limits
+    if isnothing(xlimits)
+        xl, xr = extrema(x)
+    else
+        xl = isnothing(xlimits[1]) ? min(x...) : xlimits[1]
+        xr = isnothing(xlimits[2]) ? max(x...) : xlimits[2]
+    end
+    if isnothing(ylimits)
+        yd, yu = extrema(y)
+    else
+        yd = isnothing(ylimits[1]) ? min(y...) : ylimits[1]
+        yu = isnothing(ylimits[2]) ? max(y...) : ylimits[2]
+    end
+    xlidx = argmin(abs.(x .- xl))
+    xridx = argmin(abs.(x .- xr))
+    ydidx = argmin(abs.(y .- yd))
+    yuidx = argmin(abs.(y .- yu))
+    return x[xlidx:xridx], y[ydidx:yuidx], z[ydidx:yuidx,xlidx:xridx]
+end
+
+function limitdata(x, y, limits)
+    idxl = argmin(abs.(x .- limits[1]))
+    idxr = argmin(abs.(x .- limits[2]))
+    return x[idxl:idxr], y[idxl:idxr]
+end
+
+# using FiniteDifferences
+# using DataInterpolations
+# using Interpolations
+# function binstep_kernel(V::AbstractVector, I, binV)
+#     sp = sortperm(V)
+#     Vsp = V[sp]
+#     Isp = I[sp]
+#     vi = 1
+#     Ih = Vector{Union{Missing, Float64}}(undef, length(binV)-1)
+#     for (i, bdv) in enumerate(binV[1:end-1])
+#         Ihbin = []
+#         for (j, v) in enumerate(Vsp[vi:end])
+#             if bdv <= v < binV[i+1]
+#                 push!(Ihbin, Isp[vi + j - 1])
+#             else
+#                 Ih[i] = length(Ihbin) > 1 ? - -(extrema(Ihbin)...) : missing
+#                 vi = vi + j
+#                 break
+#             end
+#         end
+#         vi == length(V) && break
+#     end
+#     binV[2:end], Ih
+# end
+
+# binstep(V::Vector, I, δ) = binstep_kernel(V, I, collect(V[1]:δ:V[end]))
+
+# function binstep(Vs::AbstractMatrix, I, δ)
+#     minV, maxV = extrema(Vs)
+#     binV = collect(minV:δ:maxV)
+#     m = length(binV)
+#     Ihs = Matrix{Union{Missing,Float64}}(undef, m - 1, size(Vs, 2))
+#     for j in axes(Vs, 2)
+#         @views Ihs[:, j] .= binstep_kernel(Vs[:, j], I, binV)[2]
+#     end
+#     binV[2:end], Ihs
+# end
+
+function dR(V::AbstractVector, I; p=12)
+    dRm = central_fdm(p, 1)
+    # interpvm = LinearInterpolation(V, I; extrapolate=true)
+    interpvm = linear_interpolation(I, V; extrapolation_bc=Line())
+    dRm_extra(i) = extrapolate_fdm(dRm, x -> interpvm(x), i)[1]
+    return dRm_extra.(I)
+end
+function dR(V::AbstractMatrix, I; p=12)
+    R = similar(V)
+    for j in axes(V, 2)
+        @views R[:,j] = dR(V[:,j], I)
+    end
+    return R
+end
+
+function interpVs(Vs, Rs)
+    minv, maxv = extrema(Vs)
+    rangev = range(minv, maxv, length=size(Rs, 1))
+    Rsn = similar(Rs, Union{Float64,Missing})
+    fill!(Rsn, missing)
+    for j in axes(Rs, 2)
+        # interp = LinearInterpolation(Rs[:, j], Vs[:, j]; extrapolate=true)
+        sp = sortperm(Vs[:, j])
+        interp = linear_interpolation(Vs[:, j][sp], Rs[:, j][sp]; extrapolation_bc=Line())
+        minvj, maxvj = extrema(Vs[:, j])
+        idxmin, idxmax = argmin(abs.(rangev .- minvj)), argmin(abs.(rangev .- maxvj))
+        Rsn[idxmin:idxmax, j] = interp.(rangev[idxmin:idxmax])
+    end
+    rangev, Rsn
+end
+
+function interpmatrix(y, z, rate=1)
+    newy = range(y[1], y[end], length=round(Int, length(y)*rate))
+    newz = similar(z, length(newy), size(z, 2))
+    for j in axes(z, 2)
+        # interp = LinearInterpolation(z[:, j], y; extrapolate=true)
+        interp = linear_interpolation(y, z[:, j]; extrapolation_bc=Line())
+        @views newz[:, j] .= interp.(newy)
+    end
+    return newy, newz
+end
+
+function lockin!(f; α=0.01, freq=100)
+    g(i, t) = f(i + α*cos(2π*freq*t))*cos(2π*freq*t)
+    F(i) = 2freq*solve(IntegralProblem((t, p) -> g(i, t),0.0,1.0/freq), QuadGKJL()).u/α
+end
+
+function lockin!(is, vs; α=0.01, freq=100, m=0, T=0.1, t=Inf)
+    interp = LinearInterpolation(is, vs; extrapolation_bc=Line())
+    F = lockin!(x -> interp(x); α=α, freq=freq)
+    return rcfilter!(F.(is); m=m, T=T, t=t)
+end
+
+function rcfilter!(ys; m=0, T=0.1, t=Inf)
+    h = 1 - exp(-t/T)
+    for i in 1:m
+        for i in eachindex(ys)[2:end]
+            ys[i] = h*ys[i] + (1-h)*ys[i-1]
+        end
+    end
+    return ys
 end
